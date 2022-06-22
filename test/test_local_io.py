@@ -11,6 +11,8 @@ import io
 import itertools
 import lzma
 import os
+import random
+import string
 import subprocess
 import tarfile
 import tempfile
@@ -21,6 +23,7 @@ import zipfile
 from functools import partial
 
 from json.decoder import JSONDecodeError
+from urllib.error import HTTPError
 
 import expecttest
 
@@ -28,6 +31,8 @@ from _utils._common_utils_for_test import create_temp_dir, create_temp_files, ge
 
 from torch.utils.data import DataLoader
 from torchdata.datapipes.iter import (
+    AISFileLister,
+    AISFileLoader,
     Bz2FileLoader,
     CSVDictParser,
     CSVParser,
@@ -71,6 +76,17 @@ try:
 except (ModuleNotFoundError, FileNotFoundError):
     HAS_RAR_TOOLS = False
 skipIfNoRarTools = unittest.skipIf(not HAS_RAR_TOOLS, "no rar tools")
+
+try:
+    from aistore.client.api import Client
+    from aistore.client.errors import AISError, ErrBckNotFound
+
+    AIS_CLUSTER_ENDPT = "http://localhost:8080"
+
+    HAS_AIS = Client(AIS_CLUSTER_ENDPT).is_aistore_running()
+except ImportError or ConnectionError:
+    HAS_AIS = False
+skipIfNoAIS = unittest.skipIf(not HAS_AIS, "AIS not running or library not installed")
 
 
 def filepath_fn(temp_dir_name, name: str) -> str:
@@ -886,6 +902,76 @@ class TestDataPipeLocalIO(expecttest.TestCase):
         assert len(items) == nsamples
         assert items[0][".txt"] == "text0"
         assert items[9][".bin"] == "bin9"
+
+    @skipIfNoAIS
+    def test_ais_io_iterdatapipe(self):
+
+        # initialize client and create new bucket
+        ais_client = Client(AIS_CLUSTER_ENDPT)
+        letters = string.ascii_lowercase
+        ais_bck_name = "".join(random.choice(letters) for _ in range(10))
+        ais_client.create_bucket(ais_bck_name)
+        # create temp files
+        num_objs = 10
+
+        # create 10 objects in the `/temp` dir
+        for i in range(num_objs):
+            object_body = "test string" * random.randrange(1, 10)
+            content = object_body.encode("utf-8")
+            obj_name = f"temp/obj{ i }"
+            with tempfile.NamedTemporaryFile() as file:
+                file.write(content)
+                file.flush()
+                ais_client.put_object(ais_bck_name, obj_name, file.name)
+
+        # create 10 objects in the `/`dir
+        for i in range(num_objs):
+            object_body = "test string" * random.randrange(1, 10)
+            content = object_body.encode("utf-8")
+            obj_name = f"obj{ i }"
+            with tempfile.NamedTemporaryFile() as file:
+                file.write(content)
+                file.flush()
+                ais_client.put_object(ais_bck_name, obj_name, file.name)
+
+        prefixes = [
+            ["ais://" + ais_bck_name],
+            ["ais://" + ais_bck_name + "/"],
+            ["ais://" + ais_bck_name + "/temp/", "ais://" + ais_bck_name + "/obj"],
+        ]
+
+        # check if the created files exist
+        for prefix in prefixes:
+            urls = AISFileLister(url=AIS_CLUSTER_ENDPT, source_datapipe=prefix)
+            ais_loader = AISFileLoader(url=AIS_CLUSTER_ENDPT, source_datapipe=urls)
+            with self.assertRaises(TypeError):
+                len(urls)
+            self.assertEqual(len(list(urls)), 20)
+            self.assertEqual(sum(1 for _ in ais_loader), 20)
+
+        # check for incorrect prefixes
+        prefixes = ["ais://asdasd"]
+
+        # AISFileLister: Bucket not found
+        try:
+            list(AISFileLister(url=AIS_CLUSTER_ENDPT, source_datapipe=prefixes))
+        except ErrBckNotFound as err:
+            self.assertEqual(err.status_code, 404)
+
+        # AISFileLoader: incorrect inputs
+        url_list = [[""], ["ais:"], ["ais://"], ["s3:///unkown-bucket"]]
+
+        for url in url_list:
+            with self.assertRaises(AISError):
+                file_loader = AISFileLoader(url=AIS_CLUSTER_ENDPT, source_datapipe=url)
+                for _ in file_loader:
+                    pass
+
+        # Try to destroy bucket and its items
+        try:
+            ais_client.destroy_bucket(ais_bck_name)
+        except ErrBckNotFound:
+            pass
 
 
 if __name__ == "__main__":
