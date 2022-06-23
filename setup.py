@@ -195,4 +195,7 @@ if __name__ == "__main__":
             "build_ext": CMakeBuild,
             "clean": clean,
         },
+        extras_require={
+            "aistore": ["aistore"],
+        },
     )
