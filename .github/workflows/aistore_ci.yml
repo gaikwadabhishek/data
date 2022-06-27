@@ -1,4 +1,4 @@
-name: Run DataPipes Tests
+name: Run AIStore Datapipe Test
 on:
   push:
     branches:
@@ -17,8 +17,8 @@ jobs:
   test:
     if:
       # TODO: tentatively adding this to test workflow
-      ${{ github.repository_owner == 'pytorch' && (github.event.action != 'labeled' ||
-      startsWith(github.event.label.name, 'ciflow')) }}
+      # ${{ github.repository_owner == 'pytorch' && (github.event.action != 'labeled' ||
+      # startsWith(github.event.label.name, 'ciflow')) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
