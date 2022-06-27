@@ -16,6 +16,7 @@ on:
 jobs:
   test:
     if:
+      # TODO: tentatively adding this to test workflow
       ${{ github.repository_owner == 'pytorch' && (github.event.action != 'labeled' ||
       startsWith(github.event.label.name, 'ciflow')) }}
     runs-on: ${{ matrix.os }}
@@ -25,7 +26,6 @@ jobs:
         os:
           - macos-latest
           - ubuntu-latest
-          - windows-latest
         python-version:
           - 3.7
           - 3.8
@@ -41,24 +41,10 @@ jobs:
           fi
           echo "::set-output name=value::$PT_CHANNEL"
         id: pytorch_channel
-      - name: Setup additional system libraries
-        if: startsWith( matrix.os, 'ubuntu' )
-        run: |
-          sudo add-apt-repository multiverse
-          sudo apt update
-          sudo apt install rar unrar libssl-dev libcurl4-openssl-dev zlib1g-dev
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Setup msbuild on Windows
-        if: matrix.os == 'windows-latest'
-        uses: microsoft/setup-msbuild@v1.1
-      - name: Set up Visual Studio shell
-        if: matrix.os == 'windows-latest'
-        uses: egor-tensin/vs-shell@v2
-        with:
-          arch: x64
       - name: Check out source repository
         uses: actions/checkout@v2
         with:
@@ -67,31 +53,13 @@ jobs:
         run: |
           pip3 install -r requirements.txt
           pip3 install --pre torch -f "${{ steps.pytorch_channel.outputs.value }}"
-          pip3 install cmake ninja
           echo "/home/runner/.local/bin" >> $GITHUB_PATH
+      - name: Run AIStore local deployment
+        uses: NVIDIA/aistore@master
       - name: Build TorchData
         run: |
           python setup.py install
-        env:
-          BUILD_S3: 1
       - name: Install test requirements
         run: pip3 install -r test/requirements.txt
-      - name: Run DataPipes tests with pytest
-        if: ${{ ! contains(github.event.pull_request.labels.*.name, 'ciflow/slow') }}
-        run:
-          pytest --no-header -v test --ignore=test/test_period.py --ignore=test/test_text_examples.py
-          --ignore=test/test_audio_examples.py --ignore=test/test_aistore.py
-      - name: Run DataPipes tests with pytest (including slow tests)
-        if: ${{ contains(github.event.pull_request.labels.*.name, 'ciflow/slow') }}
-        run:
-          pytest --no-header -v test --ignore=test/test_period.py --ignore=test/test_text_examples.py
-          --ignore=test/test_audio_examples.py --ignore=test/test_aistore.py
-        env:
-          PYTORCH_TEST_WITH_SLOW: 1
-      - name: Run DataPipes period tests with pytest
-        if: ${{ contains(github.event.pull_request.labels.*.name, 'ciflow/period') }}
-        run:
-          pytest --no-header -v test/test_period.py --ignore=test/test_text_examples.py
-          --ignore=test/test_audio_examples.py --ignore=test/test_aistore.py
-        env:
-          PYTORCH_TEST_WITH_SLOW: 1
+      - name: Run AIStore DataPipe tests with pytest
+        run: pytest --no-header -v test/test_aistore.py
